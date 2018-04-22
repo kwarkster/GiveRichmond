@@ -1,0 +1,305 @@
+---
+title: "Jenkins Foundation Investment Dashboard"
+output:
+  html_document:
+    self_contained: no
+---
+
+
+A quick look at past investments and current opportunities
+
+# Past Investments
+
+### 19-Year History: 1996-2015
+
+This line plot tracks Jenkins investments by focus area over the past 
+19 years.  Last year, for the first time since 2008, the Jenkins Foundation spent more on Key Community Health Isues and less on Access to Care.
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=10}
+library(plyr)
+library(lubridate)
+library(reshape2)
+library(stringr)
+library(googleVis)
+library(scales)
+
+op <- options(gvis.plot.tag='chart')
+
+source("jenkins4.R")
+
+line5data<-ddply(jenkins, .(j.focus, year), summarize, 
+	Total_Investments=sum(Grant.Amt, na.rm=T))
+line5data<-dcast(line5data, year~j.focus, value.var="Total_Investments")
+line5data$Access.html.tooltip<-paste(line5data$year, "-", dollar(line5data[,2]))
+line5data$Issues.html.tooltip<-paste(line5data$year, "-", dollar(line5data[,3]))
+line5data$None.html.tooltip<-paste(line5data$year, "-", dollar(line5data[,4]))
+
+line5data<-line5data[,c("year", "Access to Health Care Services", 
+                          "Access.html.tooltip", "Key Community Health Issues",
+                        "Issues.html.tooltip", "None", "None.html.tooltip")]
+line5<-gvisLineChart(line5data, xvar="year", 
+                     yvar=c("Access to Health Care Services", 
+                          "Access.html.tooltip", "Key Community Health Issues",
+                        "Issues.html.tooltip", "None", "None.html.tooltip"),
+     options=list( 
+		vAxis="{format:'currency'}",
+		hAxis="{format:'####'}",
+		bar="{groupWidth:'90%'}",
+		colors="['#37939B', '#FFC20E', '#B30838']",
+    lineWidth=2,
+		width=1000, 
+		height=450,
+		title={"Investments by Focus Area"}))
+plot(line5)
+```
+
+### Grant Investments by Strategy
+
+This bar chart illustrates the Jenkins Foundation's cumulative investments in different strategy areas since 2010.  The foundation has spent the most on Primary Care interventions.   
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.height=10, fig.width=10}
+bar5data<-ddply(jenkins, .(j.strategy), summarize, 
+	Total_Investments=sum(Grant.Amt, na.rm=T))
+bar5data$j.strategy<-as.factor(bar5data$j.strategy)
+	bar5data$j.strategy<-reorder(bar5data$j.strategy, 
+		bar5data$Total_Investments)
+bar5data$Investment.html.tooltip<-dollar(bar5data$Total_Investments)
+
+bar5<-gvisBarChart(bar5data, xvar="j.strategy", yvar=c("Total_Investments", 
+                                                        "Investment.html.tooltip"),
+     options=list( 
+		hAxis="{format:'currency'}",
+		bar="{groupWidth:'90%'}",
+		colors="['#37939B']",
+		width=1000,
+		height=500,
+		title={"Cumulative Investments by Strategy"}))
+plot(bar5)
+```
+#Current Opportunities: 2016 Proposals
+
+### Greater Richmond Community Health Issues
+The gauges below show the percentage of adults in the Jenkins Foundation's region who report experiencing a given health issue.
+
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(rgeos)
+library(zoo)
+library(gridExtra)
+library(maps)
+library(ggmap)
+library(mapproj)
+library(rgdal)
+library(plotly)
+library(maptools)
+library(tigris)
+
+
+gauge<-atlas[,2:7]
+gauge$regionTotal<-apply(gauge, 1, function(x) sum(x, na.rm=T))
+gauge$indicator=atlas$indicator
+gauge$regionP<-gauge$regionTotal/890433
+gauge$regionP[str_detect(gauge$indicator, "18+")]<-gauge$regionTotal[str_detect(gauge$indicator, "18+")]/776499
+gauge$regionP<-round(gauge$regionP*100, 1)
+
+keep<-c( "Fair or Poor Health Status (age 18+, #)",
+	"Diabetes (age 18+, #)",
+	"High Blood Pressure (age 18+, #)",
+	"Oral Health: Access (age 18+ no dental visit in past year, #)",
+	"Overweight or Obese (age 18+, #)",
+	"Access to doctor (age 18+ could not see doctor due to cost, #)",
+	"Uninsured (age 0-64, #)" ,
+	"Binge Alcohol Use (age 18+, #)",
+	"Teenage Pregnancy (age 10-19, #)" 
+	)
+
+# get smaller set of these indicators
+gauge<-subset(gauge, gauge$indicator %in% keep & is.na(gauge$regionP)==F)
+
+gauge<-gauge[!duplicated(gauge$indicator),c("regionP", "indicator")]
+
+gauge$labels<-c("No Access to Dr.","Binge Alcohol Use","Diabetes",
+                "Poor Health Status","High Blood Pressure", 
+	"No Oral Health Acces", "Overweight/Obese", "Teenage Pregnancy")
+
+gauge<-gauge[,c("labels", "regionP")] #string labels have to be first column
+
+gaugePlot<-gvisGauge(gauge, labelvar="labels", numvar="regionP",
+			options=list(min=0, max=70, greenFrom=0,
+                 greenTo=10, yellowFrom=10, yellowTo=20,
+                 redFrom=20, redTo=70, width=1000, height=450))
+
+plot(gaugePlot)
+```
+
+### Evidence-Base and Evaluation Practices for 2016 Proposals
+The tree map below explores the foundation's investment opportunites for evidence-based strategies.  Strategy areas whose grantees demonstrate strong evaluation practices and evidence-based interventions are coded green.  Each strategy area is scaled by the amount of funding requested.
+
+To drill down into a given strategy area, hover your mouse over its square and left click.  The map will then reveal each grantee's evaluation score within the chosen strategy area.  To return to the top level of the map, right click.
+
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+treeData<-data.frame(Organization.Name=c("Strategy", levels(as.factor(japps$j.strategy)),
+			japps$Organization.Name),
+	j.strategy=c(NA, rep("Strategy", length(levels(as.factor(japps$j.strategy)))), 
+			japps$j.strategy),
+	Amount.Requested=c(sum(japps$Amount.Requested), rep(sum(japps$Amount.Requested),
+		length(levels(as.factor(japps$j.strategy)))), japps$Amount.Requested),
+	Evaluation.Score=c(4, rep(4,length(levels(as.factor(japps$j.strategy)))), 
+		japps$Is.the.logic.model.complete.and.organized.correctly.)
+	)
+
+tree<-gvisTreeMap(treeData, idvar="Organization.Name",
+	  parentvar="j.strategy", size="Amount.Requested", 
+	  colorvar="Evaluation.Score", 
+	  options=list(width=900, height=450))
+plot(tree)
+```
+
+# 2016 Investment Opportunities by Geography
+These maps show how potential Jenkins Foundation investments are aligned with community needs.
+
+#### Health Status
+This map is meant to provide broad context by highlighting the least healthy counties.  Counties are color-coded by the number of adults reporting fair or poor health status, a metric that is a solid predictor of health issues and related costs.  Click on each county to reveal how many residents report fair or poor health.
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(leaflet)
+library(htmlwidgets)
+library(RJSONIO)
+library(knitr)
+library(RColorBrewer)
+
+pal <- colorBin("OrRd", NULL, n = 5, pretty=F)
+county_popup <- paste("<strong>County: </strong>", 
+                      toupper(data$id), "<br>",
+                      "<strong>Number Affected: </strong>",
+                      comma(data$Fair.or.Poor.Health.Status..age.18...num.))
+m<-leaflet(data) %>% 
+  setView(lng =  -77.43605, lat = 37.54072, zoom = 9)%>% 
+	addTiles() 
+
+healthStatusMap<-m %>%
+	addPolygons(fillColor=~pal(Fair.or.Poor.Health.Status..age.18...num.), 
+		fillOpacity = 1, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) 
+healthStatusMap
+```
+
+#### Primary Care
+Counties are color-coded by the number of adults who report being unable to go to the doctor due to costs.  The darker read the county, the more adults who report missing out on primary care.  Blue points on the map indicate the number of clients that grantees in the Primary Care strategy report reaching.  This map (and all maps to follow) are interactive.  You can click on a county or circle to learn more about the number of residents affected by a health issue and how many residents grantees can potentially reach. 
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+served_popup<-paste0("<strong>Number Served: </strong>", 
+                      mapdata$Primary.Care)
+county_popup <- paste("<strong>County: </strong>", 
+                      toupper(data$id), "<br>",
+                      "<strong>Number Affected: </strong>",
+                      comma(data$Access.to.doctor..age.18..could.not.see.doctor.due.to.cost..num.))
+primaryCareMap<-m %>%
+	addPolygons(
+  fillColor = ~pal(Access.to.doctor..age.18..could.not.see.doctor.due.to.cost..num.), 
+		fillOpacity = 1, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=pointdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Primary.Care*30, color="#00b3b3",
+		 fillOpacity=.5, popup=served_popup)
+
+primaryCareMap
+
+```
+
+#### Healthy Aging
+Counties are color-coded by the number seniors aged 65 years or older residing there.  Blue circles indicate the number of clients reached by Healthy Aging grantees. 
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+
+served_popup<-paste0("<strong>Number Served: </strong>", 
+                      mapdata$Healthy.Aging)
+county_popup <- paste("<strong>County: </strong>", 
+                      toupper(data$id), "<br>",
+                      "<strong>Number Affected: </strong>",
+                      comma(data$Seniors.Age.65...num))
+healthyAgingMap<-m %>%
+	addPolygons(fillColor = ~pal(Seniors.Age.65...num), 
+		fillOpacity = 1, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=pointdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Healthy.Aging*30, color="#00b3b3",
+		 fillOpacity=.5, popup=served_popup)
+healthyAgingMap
+```
+
+#### Mental Health Care
+Counties are color-coded by the number of behavioral health related hospitalizations in the area.  Blue circles indicate the number of clients reached by grantees in the foundation's mental health strategy area.
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(leaflet)
+
+served_popup<-paste0("<strong>Number Served: </strong>", 
+                      mapdata$Mental.Health.Care)
+county_popup <- paste("<strong>County: </strong>", 
+                      toupper(data$id), "<br>",
+                      "<strong>Number Affected: </strong>",
+                      comma(data$Behavioral.Health.Hospitalizations.Total..num))
+mentalHealthMap<-m %>%
+	addPolygons(fillColor = ~pal(Behavioral.Health.Hospitalizations.Total..num), 
+		fillOpacity = 1, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=pointdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Mental.Health.Care*30, color="#00b3b3",
+		 fillOpacity=.5, popup=served_popup)
+
+mentalHealthMap
+
+```
+
+#### Oral Health Care
+Counties are color-coded by the number of adults reporting that they have not been to a dentist for at least a year.  Blue circles indicate the number served by oral health grantees.
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(leaflet)
+
+served_popup<-paste0("<strong>Number Served: </strong>", 
+                      mapdata$Oral.Health.Care)
+county_popup <- paste("<strong>County: </strong>", 
+                      toupper(data$id), "<br>",
+                      "<strong>Number Affected: </strong>",
+                      comma(data$Oral.Health..Access..age.18..no.dental.visit.in.past.year..num.))
+oralHealthMap<-m %>%
+	addPolygons(fillColor = ~pal(Oral.Health..Access..age.18..no.dental.visit.in.past.year..num.), 
+		fillOpacity = 1, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=pointdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Oral.Health.Care*30, color="#00b3b3",
+		 fillOpacity=.5, popup=served_popup)
+
+oralHealthMap
+```
+
+#### Substance Abuse Treatment and Prevention
+Counties are color-coded by the number of adult residents reporting binge alcohol use.  Blue circles indicate the number of clients reached by grantees working in substance abuse treatment and prevention.
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(leaflet)
+
+served_popup<-paste0("<strong>Number Served: </strong>", 
+                      mapdata$Substance.Abuse.Treatment.and.Prevention)
+county_popup <- paste("<strong>County: </strong>", 
+                      toupper(data$id), "<br>",
+                      "<strong>Number Affected: </strong>",
+                      comma(data$Binge.Alcohol.Use..age.18...num.))
+substanceAbuseMap<-m %>%
+	addPolygons(fillColor = ~pal(Binge.Alcohol.Use..age.18...num.), 
+		fillOpacity = 1, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=pointdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Substance.Abuse.Treatment.and.Prevention, color="#00b3b3",
+		 fillOpacity=.5, popup=served_popup)
+substanceAbuseMap
+```
+
+
+
