@@ -1,0 +1,387 @@
+---
+title: "Jenkins Dashboard"
+output: 
+  html_document:
+    self_contained: no
+runtime: shiny
+---
+
+
+A quick look at past investments and current opportunities
+
+## 5-Year History: 2010-2015
+
+This line plot tracks Jenkins investments by focus area over the past 
+5 years.  In the past couple of years, the Jenkins Foundations has spent more
+on Key Community Health Isues and less on Access to Care.
+
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=10}
+library(plyr)
+library(lubridate)
+library(reshape2)
+library(stringr)
+library(googleVis)
+library(scales)
+
+op <- options(gvis.plot.tag='chart')
+
+jenkins<-read.csv("jenkins.csv", stringsAsFactors=F)
+
+jenkins$date<-as.POSIXct(jenkins$Grant.Date, format="%m/%d/%Y")
+jenkins$year<-year(jenkins$date)
+
+jenkins<-jenkins[!duplicated(jenkins$Grant.Num),]
+
+line5data<-ddply(jenkins, .(j.focus, year), summarize, 
+	Total_Investments=sum(Grant.Amt, na.rm=T))
+line5data<-dcast(line5data, year~j.focus, value.var="Total_Investments")
+line5data$Access.html.tooltip<-paste(line5data$year, "-", dollar(line5data[,2]))
+line5data$Issues.html.tooltip<-paste(line5data$year, "-", dollar(line5data[,3]))
+line5data$None.html.tooltip<-paste(line5data$year, "-", dollar(line5data[,4]))
+
+line5data<-line5data[,c("year", "Access to Health Care Services", 
+                          "Access.html.tooltip", "Key Community Health Issues",
+                        "Issues.html.tooltip", "None", "None.html.tooltip")]
+line5<-gvisLineChart(line5data, xvar="year", 
+                     yvar=c("Access to Health Care Services", 
+                          "Access.html.tooltip", "Key Community Health Issues",
+                        "Issues.html.tooltip", "None", "None.html.tooltip"),
+     options=list( 
+		vAxis="{format:'currency'}",
+		hAxis="{format:'none'}",
+		bar="{groupWidth:'90%'}",
+		colors="['#37939B', '#FFC20E', '#B30838']",
+    lineWidth=2,
+		title={"Investments by Focus Area"}))
+plot(line5)
+```
+
+## Cumulative grant investments  by  strategy
+
+This bar chart illustrates the Jenkins' foundations cumulative investments in different strategy areas since 2010.  
+
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.height=10, fig.width=10}
+bar5data<-ddply(jenkins, .(j.strategy), summarize, 
+	Total_Investments=sum(Grant.Amt, na.rm=T))
+bar5data$j.strategy<-as.factor(bar5data$j.strategy)
+	bar5data$j.strategy<-reorder(bar5data$j.strategy, 
+		bar5data$Total_Investments)
+bar5data$Investment.html.tooltip<-dollar(bar5data$Total_Investments)
+
+bar5<-gvisBarChart(bar5data, xvar="j.strategy", yvar=c("Total_Investments", 
+                                                        "Investment.html.tooltip"),
+     options=list( 
+		hAxis="{format:'currency'}",
+		bar="{groupWidth:'90%'}",
+		colors="['#37939B']",
+		title={"Cumulative Investments by Strategy"}))
+plot(bar5)
+```
+## Current Opportunities
+
+### Greater Richmond Community Health Issues
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(rgeos)
+library(zoo)
+library(gridExtra)
+library(maps)
+library(ggmap)
+library(mapproj)
+library(rgdal)
+library(plotly)
+library(maptools)
+library(tigris)
+
+apps<-read.csv("jenkins apps.csv", stringsAsFactors=F)
+
+japps1<-apps[apps$Organization.Name %in% jenkins$Ctc.Organization,]
+japps2<-apps[str_detect(apps$Results.Statement, "Health"),]
+
+japps<-rbind(japps1, 
+  japps2[!(japps2$Organization.Name %in% japps1$Organization.Name),])
+
+# Now handcoding jenkins strategies in excel
+#write.csv(japps, "jenkins only apps dump.csv")
+# Reading in the new handcoded data
+
+japps<-read.csv("jenkins only apps.csv", stringsAsFactors=F)
+
+#### CREATING DF FOR MAPPING GRANT DATA ####
+# first need to read in map data 
+censusdata<-readOGR(dsn=".", layer="tl_2015_us_county", verbose=F)
+censusdata<-censusdata[censusdata$STATEFP==51,]
+
+censusdata$id<-tolower(censusdata$NAME)
+censusdata$proj4string <- "+proj=longlat +ellps=clrk66"
+
+atlas<-read.csv("atlas.csv", stringsAsFactors=F, na.str=c("--", "N/A"))
+
+### Need to clean up foundant data/jenkins applications
+### so that they are in the same shape as the GIS/map data
+
+map.data<-japps[ , c("Chesterfield.County", 
+	"Colonial.Heights", "Goochland.County", "Hanover.County", 
+	"Henrico.County", "Hopewell", "Petersburg", 
+	"Powhatan.County", "Richmond.City", "j.strategy",	
+	"Amount.Requested")]
+
+foundantDF<-melt(map.data, id.vars=c("j.strategy", "Amount.Requested"), 
+	variable.name="county")
+foundantDF<-ddply(foundantDF, .(j.strategy, county), summarize, 
+	num.served=sum(value, na.rm=T))
+castFoundantDF<-dcast(foundantDF, county~j.strategy, value.var="num.served")
+
+castFoundantDF$id<-tolower(castFoundantDF$county)
+castFoundantDF$id<-gsub("[.]", " ", castFoundantDF$id)
+castFoundantDF$id<-gsub("county", "", castFoundantDF$id)
+castFoundantDF$id<-gsub("city", "", castFoundantDF$id)
+castFoundantDF$id<-str_trim(castFoundantDF$id, "right")
+
+
+### Need to clean up the health atlas data
+### so that they are in the same shape as the GIS/map data
+
+atlasDF<-melt(atlas, id.vars="indicator", variable.name="county")
+atlasDF<-atlasDF[!duplicated(atlasDF),] # some indicators are duplicated
+castAtlasDF<-dcast(atlasDF, county~indicator, value.var="value", 
+	fun.aggregate=sum)
+
+castAtlasDF$id<-castAtlasDF$county
+castAtlasDF$id<-gsub("[.]", " ", castAtlasDF$county)
+
+mapdata<-join(castFoundantDF, castAtlasDF, by="id", type="right")
+
+### Now need to get center points for overlaying points on heat map
+
+chesterfieldLon<-geocode("chesterfield county va")[[1]]
+colonialHeightsLon<-geocode("colonial heights, va")[[1]]
+goochlandLon<-geocode("goochland county va")[[1]]
+hanoverLon<-geocode("hanover county va")[[1]]
+hopewellLon<-geocode("hopewell county va")[[1]]
+petersburgLon<-geocode("petersburg, va")[[1]]
+powhatanLon<-geocode("powhatan county va")[[1]]
+richmondLon<-geocode("richmond, va")[[1]]
+henricoLon<-geocode("henrico county, va")[[1]]
+newKentLon<-geocode("new kent county, va")[[1]]
+charlesCityLon<-geocode("charles city county, va")[[1]]
+
+
+
+chesterfieldLat<-geocode("chesterfield county va")[[2]]
+colonialHeightsLat<-geocode("colonial heights, va")[[2]]
+goochlandLat<-geocode("goochland county va")[[2]]
+hanoverLat<-geocode("hanover county va")[[2]]
+hopewellLat<-geocode("hopewell county va")[[2]]
+petersburgLat<-geocode("petersburg, va")[[2]]
+powhatanLat<-geocode("powhatan county va")[[2]]
+richmondLat<-geocode("richmond, va")[[2]]
+henricoLat<-geocode("henrico county, va")[[2]]
+newKentLat<-geocode("new kent county, va")[[2]]
+charlesCityLat<-geocode("charles city county, va")[[2]]
+
+mapdata$centerLon<-NA
+mapdata$centerLon[mapdata$id=="chesterfield"]<-chesterfieldLon
+mapdata$centerLon[mapdata$id=="colonial heights"]<-colonialHeightsLon
+mapdata$centerLon[mapdata$id=="goochland"]<-goochlandLon
+mapdata$centerLon[mapdata$id=="hanover"]<-hanoverLon
+mapdata$centerLon[mapdata$id=="hopewell"]<-hopewellLon
+mapdata$centerLon[mapdata$id=="petersburg"]<-petersburgLon
+mapdata$centerLon[mapdata$id=="powhatan"]<-powhatanLon
+mapdata$centerLon[mapdata$id=="richmond"]<-richmondLon
+mapdata$centerLon[mapdata$id=="henrico"]<-henricoLon
+mapdata$centerLon[mapdata$id=="new kent"]<-newKentLon
+mapdata$centerLon[mapdata$id=="charles city"]<-charlesCityLon
+
+mapdata$centerLat<-NA
+mapdata$centerLat[mapdata$id=="chesterfield"]<-chesterfieldLat
+mapdata$centerLat[mapdata$id=="colonial heights"]<-colonialHeightsLat
+mapdata$centerLat[mapdata$id=="goochland"]<-goochlandLat
+mapdata$centerLat[mapdata$id=="hanover"]<-hanoverLat
+mapdata$centerLat[mapdata$id=="hopewell"]<-hopewellLat
+mapdata$centerLat[mapdata$id=="petersburg"]<-petersburgLat
+mapdata$centerLat[mapdata$id=="powhatan"]<-powhatanLat
+mapdata$centerLat[mapdata$id=="richmond"]<-richmondLat
+mapdata$centerLat[mapdata$id=="henrico"]<-henricoLon
+mapdata$centerLat[mapdata$id=="new kent"]<-newKentLat
+mapdata$centerLat[mapdata$id=="charles city"]<-charlesCityLat
+
+
+colnames(mapdata)<-gsub(",", ".", colnames(mapdata))
+colnames(mapdata)<-gsub("#", "num", colnames(mapdata))
+colnames(mapdata)<-gsub("%", "percent", colnames(mapdata))
+colnames(mapdata)<-gsub("[(]", ".", colnames(mapdata))
+colnames(mapdata)<-gsub("[)]", ".", colnames(mapdata))
+colnames(mapdata)<-gsub(" ", ".", colnames(mapdata))
+
+data<-geo_join(censusdata, mapdata, "id", "id") 
+
+
+#get rid of richmond county
+data[which(data$COUNTYFP==159),]<-NA
+
+#get rid of powhatan county
+data[which(data$COUNTYFP==145),]<-NA
+
+gauge<-atlas[,2:12]
+gauge$regionTotal<-apply(gauge, 1, function(x) sum(x, na.rm=T))
+gauge$indicator=atlas$indicator
+gauge$regionP<-gauge$regionTotal/973206
+gauge$regionP[str_detect(gauge$indicator, "18+")]<-gauge$regionTotal[str_detect(gauge$indicator, "18+")]/852855
+gauge$regionP<-round(gauge$regionP*100, 1)
+gauge$VAp<-(atlas$virginia/6356993)*100
+gauge$regionDif<-gauge$regionP-gauge$VAp
+
+
+keep<-c( "Fair or Poor Health Status (age 18+, #)",
+	"Diabetes (age 18+, #)",
+	"High Blood Pressure (age 18+, #)",
+	"Oral Health: Access (age 18+ no dental visit in past year, #)",
+	"Overweight or Obese (age 18+, #)",
+	"Access to doctor (age 18+ could not see doctor due to cost, #)",
+	"Uninsured (age 0-64, #)" ,
+	"Binge Alcohol Use (age 18+, #)",
+	"Teenage Pregnancy (age 10-19, #)" 
+	)
+
+# get smaller set of these indicators
+gauge<-subset(gauge, gauge$indicator %in% keep & is.na(gauge$regionP)==F)
+
+gauge<-gauge[!duplicated(gauge$indicator),c("regionP", "indicator")]
+
+gauge$labels<-c("No Access to Dr.","Binge Alcohol Use","Diabetes",
+                "Poor Health Status","High Blood Pressure", 
+	"No Oral Health Acces", "Overweight/Obese", "Teenage Pregnancy")
+
+gauge<-gauge[,c("labels", "regionP")] #string labels have to be first column
+
+gaugePlot<-gvisGauge(gauge, labelvar="labels", numvar="regionP",
+			options=list(min=0, max=70, greenFrom=0,
+                 greenTo=10, yellowFrom=10, yellowTo=20,
+                 redFrom=20, redTo=70, width=1000, height=1000))
+
+plot(gaugePlot)
+```
+
+### Strength of Evidence and Evaluation Practices
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+treeData<-data.frame(Organization.Name=c("Strategy", levels(as.factor(japps$j.strategy)),
+			japps$Organization.Name),
+	j.strategy=c(NA, rep("Strategy", length(levels(as.factor(japps$j.strategy)))), 
+			japps$j.strategy),
+	Amount.Requested=c(sum(japps$Amount.Requested), rep(sum(japps$Amount.Requested),
+		length(levels(as.factor(japps$j.strategy)))), japps$Amount.Requested),
+	Evaluation.Score=c(4, rep(4,length(levels(as.factor(japps$j.strategy)))), 
+		japps$Is.the.logic.model.complete.and.organized.correctly.)
+	)
+
+tree<-gvisTreeMap(treeData, idvar="Organization.Name",
+	parentvar="j.strategy", size="Amount.Requested", colorvar="Evaluation.Score")
+plot(tree)
+```
+
+### Investments by Geography
+These maps show how the Jenkins Investments are aligned with community needs.
+
+```{r results='asis', tidy=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(leaflet)
+library(shiny)
+
+strategies<-c("Primary Care", "Healthy Aging", "Mental Health Care",
+            "Substance Abuse Treatment and Prevention", "Oral Health Care",
+           "Violence Prevention")
+pal <- colorBin("OrRd", NULL, n = 5, pretty=F)
+county_popup <- paste0("<strong>County: </strong>", 
+                      toupper(data$id))
+primaryCareMap<-leaflet(data) %>% 
+  setView(lng =  -77.43605, lat = 37.54072, zoom = 10)%>% 
+  addTiles() %>%
+	addPolygons(
+  fillColor = ~pal(Access.to.doctor..age.18..could.not.see.doctor.due.to.cost..num.), 
+		fillOpacity = 0.8, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=mapdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Primary.Care*30, color="#00b3b3",
+		 fillOpacity=.5)
+
+healthyAgingMap<-leaflet(data) %>% 
+  setView(lng =  -77.43605, lat = 37.54072, zoom = 10)%>% 
+	addTiles() %>%
+	addPolygons(fillColor = ~pal(Seniors.Age.65...num), 
+		fillOpacity = 0.8, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=mapdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Healthy.Aging*30, color="#00b3b3",
+		 fillOpacity=.5)
+
+mentalHealthMap<-leaflet(data) %>% 
+  setView(lng =  -77.43605, lat = 37.54072, zoom = 10) %>% 
+  addTiles() %>%
+	addPolygons(fillColor = ~pal(Behavioral.Health.Hospitalizations.Total..rate), 
+		fillOpacity = 0.8, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=mapdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Mental.Health.Care*30, color="#00b3b3",
+		 fillOpacity=.5)
+
+oralHealthMap<-leaflet(data) %>% 
+  setView(lng =  -77.43605, lat = 37.54072, zoom = 10)%>% 
+  addTiles() %>%
+	addPolygons(fillColor = ~pal(Oral.Health..Access..age.18..no.dental.visit.in.past.year..num.), 
+		fillOpacity = 0.8, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=mapdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Oral.Health.Care*30, color="#00b3b3",
+		 fillOpacity=.5)
+
+substanceAbuseMap<-leaflet(data) %>% 
+  setView(lng =  -77.43605, lat = 37.54072, zoom = 10)%>% 
+  addTiles() %>%
+	addPolygons(fillColor = ~pal(Binge.Alcohol.Use..age.18...num.), 
+		fillOpacity = 0.8, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=mapdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Substance.Abuse.Treatment.and.Prevention*30, color="#00b3b3",
+		 fillOpacity=.5)
+
+violencePreventionMap<-leaflet(data) %>% 
+  setView(lng =  -77.43605, lat = 37.54072, zoom = 10) %>% 
+  addTiles() %>%
+	addPolygons(fillColor = ~pal(Bullying..School.Property..age.14.19.in.past.year..num.), 
+		fillOpacity = 0.8, 
+            color = "#BDBDC3", 
+            weight = 1, 
+            popup = county_popup) %>%
+	addCircles(data=mapdata, lng =~centerLon, lat =~centerLat,
+		 weight = 1, radius=~Violence.Prevention*30, color="#00b3b3",
+		 fillOpacity=.5)
+
+selectInput("strategies", "Strategies", strategies)
+renderLeaflet({
+  if(input$strategies=="Primary Care"){
+    primaryCareMap
+  }else if(input$strategies=="Healthy Aging"){
+    healthyAgingMap
+  }else if(input$strategies=="Mental Health Care"){
+    mentalHealthMap
+  }else if(input$strategies=="Oral Health Care"){
+    oralHealthMap
+  }else if(input$strategies=="Substance Abuse Treatment and Prevention"){
+    substanceAbuseMap
+  }else violencePreventionMap
+    
+})
+
+```
+
+
+
